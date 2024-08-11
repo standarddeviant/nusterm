@@ -9,13 +9,15 @@ use anyhow;
 use clap::Parser;
 use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
 
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, Characteristic, WriteType};
+use btleplug::api::{
+    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as ApiPeripheral, ScanFilter,
+    WriteType,
+};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
 
 use tokio::time;
 use uuid::Uuid;
-
 
 use inquire::Select;
 
@@ -24,10 +26,10 @@ use inquire::Select;
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[arg(short='n', long = "name")] // , default_value_t = None)]
+    #[arg(short = 'n', long = "name")] // , default_value_t = None)]
     name: Option<String>,
-    #[arg(short='f', long = "nus-filter", default_value_t = false)]
-    nus_filter: bool
+    #[arg(short = 'f', long = "nus-filter", default_value_t = false)]
+    nus_filter: bool,
 }
 
 // NOTE: BLE UUIDs for NUS copied from bleak example, uart_service.py
@@ -59,19 +61,28 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
             .expect("Can't scan BLE adapter for connected devices...");
         time::sleep(Duration::from_secs(5)).await;
         let peripherals = adapter.peripherals().await?;
-        let mut pstrings: Vec<String> = peripherals
-            .iter()
-            .map(|p| { p.to_string() })
-            .collect();
-        pstrings.insert(0, String::from("NOT IN LIST; KEEP SCANNING"));
-        if let Ok(pdesc) = Select::new("Please choose a BLE peripheral", pstrings.clone()).prompt() {
+        let mut pstrings: Vec<String> = vec![String::from("NOT IN LIST; KEEP SCANNING")];
+        for p in &peripherals {
+            pstrings.push(match p.properties().await {
+                Ok(Some(props)) => {
+                    props.address;
+                    format!("{}", props.address)
+                }
+                _ => {
+                    format!("ERR: unable to fetch properties")
+                }
+            });
+        }
+
+        if let Ok(pdesc) = Select::new("Please choose a BLE peripheral", pstrings.clone()).prompt()
+        {
             if pdesc.starts_with("NOT IN LIST;") {
                 continue;
             }
 
             // getting here means a peripheral has been selected, get index by string
             let index = pstrings.iter().position(|s| pdesc.eq(s)).unwrap();
-            let periph= &peripherals[index-1]; // NOTE: minute-one is b/c "NOT IN LIST" above
+            let periph = &peripherals[index - 1]; // NOTE: minute-one is b/c "NOT IN LIST" above
             if let Err(err) = periph.connect().await {
                 eprintln!("Error connecting to peripheral: {}", err);
                 continue;
@@ -93,10 +104,11 @@ fn print_nus_failure() {
 }
 
 async fn disconnect_periph(p: &PlatformPeripheral) {
-    print!("Disconnecting from {:?}... ", p.to_string());
+    let addr = p.address();
+    print!("Disconnecting from {:?}... ", addr);
     match p.disconnect().await {
-        Ok(_good) => {},
-        Err(_bad) => {/* TODO: handle error */ }
+        Ok(_good) => {}
+        Err(_bad) => { /* TODO: handle error */ }
     }
     println!("[DONE]");
 }
@@ -105,11 +117,10 @@ fn press_enter(prompt: &str) {
     println!("{prompt}");
     let mut _input = String::new();
     match std::io::stdin().read_line(&mut _input) {
-        Ok(_good) => {},
+        Ok(_good) => {}
         Err(_bad) => {}
     }
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -120,7 +131,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     // print args
     println!("args = {args:?}");
-
 
     // NOTE: init btleplug
     let manager = Manager::new().await?;
@@ -138,7 +148,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // NOTE: this connects the adapter (i.e. the central) to the peripheral inside the function
     // NOTE: it modifies the state of adapter
-    let pdesc= connect_periph(&adapter).await?;
+    let pdesc = connect_periph(&adapter).await?;
     println!("Connected to {:?}", pdesc);
 
     // get access to what should be the only connected peripheral
@@ -166,20 +176,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut found_rx: bool = false;
     for c in chars.iter() {
         match c.uuid {
-            UART_TX_CHAR_UUID  => {
+            UART_TX_CHAR_UUID => {
                 if c.properties.contains(CharPropFlags::NOTIFY) {
                     println!("Subscribing to characteristic {:?}", c);
                     if let Ok(_good) = periph.subscribe(c).await {
                         subscribed_tx = true;
                     }
                 }
-            },
-            UART_RX_CHAR_UUID  => {
+            }
+            UART_RX_CHAR_UUID => {
                 println!("Setting nus_send to characteristic {:?}", c);
                 found_rx = true;
                 nus_send = c;
             }
-            _ => ()
+            _ => (),
         }
     }
 
@@ -190,7 +200,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // TODO: document different possible error codes
         std::process::exit(42000);
     }
-
 
     println!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await?;
@@ -213,10 +222,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // NOTE: init reedline
     let mut line_editor = Reedline::create();
-    // let prompt = DefaultPrompt::default();
+    // TODO: make getting props/formatting an async helper to hide the mess
+    let props = periph.properties().await.unwrap().unwrap();
+    let pdesc = {
+        if let Some(name) = props.local_name {
+            format!("{} : {} ({:?})", name, props.address, props.address_type)
+        } else {
+            format!("{} ({:?})", props.address, props.address_type)
+        }
+    };
     let prompt = DefaultPrompt {
         left_prompt: DefaultPromptSegment::CurrentDateTime,
-        right_prompt: DefaultPromptSegment::Basic(periph.to_string())
+        right_prompt: DefaultPromptSegment::Basic(pdesc),
     };
 
     loop {
@@ -230,11 +247,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let tmp_s: String = format!("{buffer}\n");
                 let tmp_bytes = tmp_s.as_bytes();
                 // println!("sending -->{:?}<--", buffer);
-                let wr_result = periph.write(nus_send, tmp_bytes, WriteType::WithoutResponse).await;
+                let wr_result = periph
+                    .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
+                    .await;
                 match wr_result {
                     Ok(_good) => {
                         // println!("Success = {good:?}");
-                    },
+                    }
                     Err(bad) => {
                         println!("Error writing to {nus_send:?} = {bad:?}");
                         /* TODO - handle error */
@@ -256,5 +275,3 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-
-

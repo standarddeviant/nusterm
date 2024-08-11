@@ -1,4 +1,4 @@
 /target
 .idea/*
 uart_service.py
-nusterm*exe
+nusterm_*x86_64*
