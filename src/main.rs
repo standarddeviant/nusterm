@@ -1,17 +1,19 @@
 // Create a default reedline object to handle user input
 
+use std::io;
+use std::error::Error;
+use std::time::Duration;
+
+use text_io::read;
 use anyhow;
 
 use clap::Parser;
-
 use reedline::{DefaultPrompt, Reedline, Signal};
-
 
 use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, Characteristic, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
-use std::error::Error;
-use std::time::Duration;
+
 use tokio::time;
 use uuid::Uuid;
 
@@ -85,6 +87,31 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
     }
 }
 
+fn print_nus_failure() {
+    println!("ERROR: Unable to properly configure the BLE characteristics required to use NUS");
+    println!("ERROR: NOTE: NUS_TX (BLE notifs from periph) = {UART_TX_CHAR_UUID}");
+    println!("ERROR: NOTE: NUS_RX (BLE write to periph) = {UART_RX_CHAR_UUID}");
+}
+
+async fn disconnect_periph(mut p: &PlatformPeripheral) {
+    print!("Disconnecting from {:?}... ", p.to_string());
+    match p.disconnect().await {
+        Ok(_good) => {},
+        Err(_bad) => {/* TODO: handle error */ }
+    }
+    println!("[DONE]");
+}
+
+fn press_enter(prompt: &str) {
+    println!("{prompt}");
+    let mut _input = String::new();
+    match(std::io::stdin().read_line(&mut _input)) {
+        Ok(_good) => {},
+        Err(_bad) => {}
+    }
+}
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // NOTE: init logger?
@@ -139,20 +166,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Connected, configuring NUS chars + notifications...");
     let mut nus_send: &Characteristic = &chars.first().unwrap();
+    let mut subscribed_tx = false;
+    let mut found_rx: bool = false;
     for c in chars.iter() {
         match c.uuid {
             UART_TX_CHAR_UUID  => {
                 if c.properties.contains(CharPropFlags::NOTIFY) {
                     println!("Subscribing to characteristic {:?}", c);
-                    periph.subscribe(c).await?;
+                    if let Ok(_good) = periph.subscribe(c).await {
+                        subscribed_tx = true;
+                    }
                 }
             },
             UART_RX_CHAR_UUID  => {
                 println!("Setting nus_send to characteristic {:?}", c);
+                found_rx = true;
                 nus_send = c;
             }
             _ => ()
         }
+    }
+
+    if !(subscribed_tx && found_rx) {
+        print_nus_failure();
+        disconnect_periph(&periph).await;
+        press_enter("Press <ENTER> to exit");
+        // TODO: document different possible error codes
+        std::process::exit(42000);
     }
 
 
@@ -186,7 +226,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // NOTE: add newline char
                 let tmp_s: String = format!("{buffer}\n");
                 let tmp_bytes = tmp_s.as_bytes();
-                println!("sending -->{:?}<--", buffer);
+                // println!("sending -->{:?}<--", buffer);
                 let wr_result = periph.write(nus_send, tmp_bytes, WriteType::WithoutResponse).await;
                 match wr_result {
                     Ok(_good) => {
@@ -208,12 +248,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     println!("Stopping tokio task handler (notifications)...");
     notifs_handler.abort();
-    println!("Disconnecting from {:?}...", periph.to_string());
-    match periph.disconnect().await {
-        Ok(_good) => {},
-        Err(_bad) => {/* TODO: handle error */ }
-    }
-    println!("Good Bye!");
+    disconnect_periph(&periph).await;
+    press_enter("Press <ENTER> to exit");
 
     Ok(())
 }
