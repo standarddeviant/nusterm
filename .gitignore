@@ -2,3 +2,4 @@
 .idea/*
 uart_service.py
 nusterm_*x86_64*
+./bin/nusterm_*x86_64*
