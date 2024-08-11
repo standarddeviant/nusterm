@@ -8,7 +8,7 @@ use text_io::read;
 use anyhow;
 
 use clap::Parser;
-use reedline::{DefaultPrompt, Reedline, Signal};
+use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
 
 use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, Characteristic, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
@@ -93,7 +93,7 @@ fn print_nus_failure() {
     println!("ERROR: NOTE: NUS_RX (BLE write to periph) = {UART_RX_CHAR_UUID}");
 }
 
-async fn disconnect_periph(mut p: &PlatformPeripheral) {
+async fn disconnect_periph(p: &PlatformPeripheral) {
     print!("Disconnecting from {:?}... ", p.to_string());
     match p.disconnect().await {
         Ok(_good) => {},
@@ -122,9 +122,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // print args
     println!("args = {args:?}");
 
-    // NOTE: init reedline
-    let mut line_editor = Reedline::create();
-    let prompt = DefaultPrompt::default();
 
     // NOTE: init btleplug
     let manager = Manager::new().await?;
@@ -215,6 +212,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    // NOTE: init reedline
+    let mut line_editor = Reedline::create();
+    // let prompt = DefaultPrompt::default();
+    let prompt = DefaultPrompt {
+        left_prompt: DefaultPromptSegment::CurrentDateTime,
+        right_prompt: DefaultPromptSegment::Basic(periph.to_string())
+    };
 
     loop {
         let sig = line_editor.read_line(&prompt);
@@ -253,3 +257,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+
