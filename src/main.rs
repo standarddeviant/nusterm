@@ -1,19 +1,16 @@
 // Create a default reedline object to handle user input
 
-use std::sync::Arc;
 use anyhow;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::Parser;
 
 use reedline::{DefaultPrompt, Reedline, Signal};
 
 
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, ValueNotification, Characteristic, WriteType};
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, Characteristic, WriteType};
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
-use futures::stream::{Stream, StreamExt};
+use futures::stream::StreamExt;
 use std::error::Error;
-use std::fmt::format;
-use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use tokio::time;
 use uuid::Uuid;
@@ -36,7 +33,7 @@ struct Args {
 // UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 // UART_RX_CHAR_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 // UART_TX_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-const UART_SERVICE_UUID: Uuid = Uuid::from_u128(0x6E400001_B5A3_F393_E0A9_E50E24DCCA9E);
+// const UART_SERVICE_UUID: Uuid = Uuid::from_u128(0x6E400001_B5A3_F393_E0A9_E50E24DCCA9E);
 const UART_RX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400002_B5A3_F393_E0A9_E50E24DCCA9E);
 const UART_TX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400003_B5A3_F393_E0A9_E50E24DCCA9E);
 
@@ -123,12 +120,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // get access to what should be the only connected peripheral
     let plist = adapter.peripherals().await.unwrap();
-    let mut pix : usize = 0;
     let mut periph: &PlatformPeripheral = &plist[0];
     for pix in 0..plist.len() {
         let pchk = &plist[pix];
         let bchk = pchk.is_connected().await.unwrap();
-        if(bchk) {
+        if bchk {
             periph = pchk;
             break;
         }
@@ -185,7 +181,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         match sig {
             Ok(Signal::Success(buffer)) => {
                 if is_exit_string(&buffer) {
-                    println!("\nGoodbye!");
                     break;
                 }
                 // NOTE: add newline char
@@ -194,7 +189,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("sending -->{:?}<--", buffer);
                 let wr_result = periph.write(nus_send, tmp_bytes, WriteType::WithoutResponse).await;
                 match wr_result {
-                    Ok(good) => {
+                    Ok(_good) => {
                         // println!("Success = {good:?}");
                     },
                     Err(bad) => {
@@ -204,7 +199,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
-                println!("\nGoodbye!");
                 break;
             }
             x => {
@@ -212,12 +206,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-    println!("Disconnecting from {:?}", periph.to_string());
+    println!("Stopping tokio task handler (notifications)...");
     notifs_handler.abort();
+    println!("Disconnecting from {:?}...", periph.to_string());
     match periph.disconnect().await {
-        Ok(good) => {},
-        Err(bad) => {/* TODO: handle error */ }
+        Ok(_good) => {},
+        Err(_bad) => {/* TODO: handle error */ }
     }
+    println!("Good Bye!");
 
     Ok(())
 }
