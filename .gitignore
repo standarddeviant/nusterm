@@ -1,4 +1,3 @@
 /target
-.idea/modules.xml
-.idea/nusterm.iml
-.idea/vcs.xml
+.idea/*
+uart_service.py

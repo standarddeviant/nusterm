@@ -908,6 +908,7 @@ dependencies = [
  "anyhow",
  "btleplug",
  "clap",
+ "futures",
  "inquire",
  "pretty_env_logger",
  "reedline",

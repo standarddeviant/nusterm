@@ -1,5 +1,6 @@
 // Create a default reedline object to handle user input
 
+use std::sync::Arc;
 use anyhow;
 
 use clap::{ArgAction, Parser, Subcommand};
@@ -7,10 +8,12 @@ use clap::{ArgAction, Parser, Subcommand};
 use reedline::{DefaultPrompt, Reedline, Signal};
 
 
-use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::{Adapter, Manager};
-// use futures::stream::StreamExt;
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as ApiPeripheral, ScanFilter, ValueNotification, Characteristic, WriteType};
+use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
+use futures::stream::{Stream, StreamExt};
 use std::error::Error;
+use std::fmt::format;
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use tokio::time;
 use uuid::Uuid;
@@ -63,28 +66,27 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
             .map(|p| { p.to_string() })
             .collect();
         pstrings.insert(0, String::from("NOT IN LIST; KEEP SCANNING"));
-        if let Ok(psel) = Select::new("Please choose a BLE peripheral", pstrings.clone()).prompt() {
-            if psel.starts_with("NOT IN LIST;") {
+        if let Ok(pdesc) = Select::new("Please choose a BLE peripheral", pstrings.clone()).prompt() {
+            if pdesc.starts_with("NOT IN LIST;") {
                 continue;
             }
 
             // getting here means a peripheral has been selected, get index by string
-            let index = pstrings.iter().position(|s| psel.eq(s)).unwrap();
-            let peripheral = &peripherals[index-1]; // NOTE: minute-one is b/c "NOT IN LIST" above
-            if let Err(err) = peripheral.connect().await {
+            let index = pstrings.iter().position(|s| pdesc.eq(s)).unwrap();
+            let periph= &peripherals[index-1]; // NOTE: minute-one is b/c "NOT IN LIST" above
+            if let Err(err) = periph.connect().await {
                 eprintln!("Error connecting to peripheral: {}", err);
                 continue;
             }
 
+            // let platform_periph: PlatformPeripheral = periph
+
             // NOTE: after successful connection, return a description string to caller
-            return Ok(psel);
+            // let tmp = periph.deref();
+            return Ok(pdesc);
         }
     }
 }
-
-
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -114,26 +116,86 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("adapter = {:?}", adapter_info);
     }
 
-    // INFO: optionally filter on NUS service UUID, aka UART_SERVICE_UUID
-    // let nus_scan_filter = {
-    //     if args.nus_filter {
-    //         ScanFilter { services: vec![UART_SERVICE_UUID] }
-    //     } else {
-    //         ScanFilter::default()
-    //     }
-    // };
+    // NOTE: this connects the adapter (i.e. the central) to the peripheral inside the function
+    // NOTE: it modifies the state of adapter
+    let pdesc= connect_periph(&adapter).await?;
+    println!("Connected to {:?}", pdesc);
 
-    let psel= connect_periph(&adapter).await?;
-    println!("Connected to {:?}", psel);
+    // get access to what should be the only connected peripheral
+    let plist = adapter.peripherals().await.unwrap();
+    let mut pix : usize = 0;
+    let mut periph: &PlatformPeripheral = &plist[0];
+    for pix in 0..plist.len() {
+        let pchk = &plist[pix];
+        let bchk = pchk.is_connected().await.unwrap();
+        if(bchk) {
+            periph = pchk;
+            break;
+        }
+    }
+    println!("Connected to {periph:?}");
+
+    periph.discover_services().await?;
+    println!("Discovered services...");
+
+    let chars = periph.characteristics();
+    println!("Obtained chars = {chars:?}");
+
+    println!("Connected, configuring NUS chars + notifications...");
+    let mut nus_send: &Characteristic = &chars.first().unwrap();
+    for c in chars.iter() {
+        match c.uuid {
+            UART_TX_CHAR_UUID  => {
+                if c.properties.contains(CharPropFlags::NOTIFY) {
+                    println!("Subscribing to characteristic {:?}", c);
+                    periph.subscribe(c).await?;
+                }
+            },
+            UART_RX_CHAR_UUID  => {
+                println!("Setting nus_send to characteristic {:?}", c);
+                nus_send = c;
+            }
+            _ => ()
+        }
+    }
+
+
+    println!("Spawning tokio task as handler for notifications");
+    let mut notif_stream = periph.notifications().await?;
+    // TODO: determine if we need to cleanly stop this task
+    let notifs_handler = tokio::spawn(async move {
+        loop {
+            if let Some(data) = notif_stream.next().await {
+                println!(
+                    "Received data from NUS-TX [{:?}]: {:?}",
+                    data.uuid, data.value
+                );
+            }
+        }
+    });
+
 
     loop {
         let sig = line_editor.read_line(&prompt);
         match sig {
             Ok(Signal::Success(buffer)) => {
-                println!("We processed: {}", buffer);
                 if is_exit_string(&buffer) {
                     println!("\nGoodbye!");
                     break;
+                }
+                // NOTE: add newline char
+                let tmp_s: String = format!("{buffer}\n");
+                let tmp_bytes = tmp_s.as_bytes();
+                println!("sending -->{:?}<--", buffer);
+                let wr_result = periph.write(nus_send, tmp_bytes, WriteType::WithoutResponse).await;
+                match wr_result {
+                    Ok(good) => {
+                        println!("Success = {good:?}");
+                    },
+                    Err(bad) => {
+                        println!("Error writing to {nus_send:?} = {bad:?}");
+                        /* TODO - handle error */
+                    }
                 }
             }
             Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
@@ -145,5 +207,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-    return Ok(());
+    println!("Disconnecting from {:?}", periph.to_string());
+    notifs_handler.abort();
+    match periph.disconnect().await {
+        Ok(good) => {},
+        Err(bad) => {/* TODO: handle error */ }
+    }
+
+    Ok(())
 }
