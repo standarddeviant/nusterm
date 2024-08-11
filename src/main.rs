@@ -166,10 +166,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let notifs_handler = tokio::spawn(async move {
         loop {
             if let Some(data) = notif_stream.next().await {
-                println!(
-                    "Received data from NUS-TX [{:?}]: {:?}",
-                    data.uuid, data.value
-                );
+                // println!(
+                //     "Received data from NUS-TX [{:?}]: {:?}",
+                //     data.uuid, data.value
+                // );
+                let s = match String::from_utf8(data.value) {
+                    Ok(v) => v,
+                    Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+                };
+                print!("{s}");
             }
         }
     });
@@ -190,7 +195,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let wr_result = periph.write(nus_send, tmp_bytes, WriteType::WithoutResponse).await;
                 match wr_result {
                     Ok(good) => {
-                        println!("Success = {good:?}");
+                        // println!("Success = {good:?}");
                     },
                     Err(bad) => {
                         println!("Error writing to {nus_send:?} = {bad:?}");
