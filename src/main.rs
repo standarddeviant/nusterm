@@ -40,12 +40,12 @@ struct Args {
 const UART_RX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400002_B5A3_F393_E0A9_E50E24DCCA9E);
 const UART_TX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400003_B5A3_F393_E0A9_E50E24DCCA9E);
 
-fn is_exit_string(s: &String) -> bool {
-    if s.starts_with("exit") {
-        return true;
-    }
-    return false;
-}
+// fn is_exit_string(s: &String) -> bool {
+//     if s.starts_with("exit") {
+//         return true;
+//     }
+//     return false;
+// }
 
 async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
     // INFO: keep scanning until we find our peripheral
@@ -65,8 +65,11 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
         for p in &peripherals {
             pstrings.push(match p.properties().await {
                 Ok(Some(props)) => {
-                    props.address;
-                    format!("{}", props.address)
+                    if let Some(name) = props.local_name {
+                        format!("{} : {} ({:?})", name, props.address, props.address_type)
+                    } else {
+                        format!("{} ({:?})", props.address, props.address_type)
+                    }
                 }
                 _ => {
                     format!("ERR: unable to fetch properties")
@@ -240,9 +243,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let sig = line_editor.read_line(&prompt);
         match sig {
             Ok(Signal::Success(buffer)) => {
-                if is_exit_string(&buffer) {
-                    break;
-                }
                 // NOTE: add newline char
                 let tmp_s: String = format!("{buffer}\n");
                 let tmp_bytes = tmp_s.as_bytes();
