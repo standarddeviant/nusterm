@@ -1,10 +1,9 @@
 // Create a default reedline object to handle user input
 
-use std::io;
 use std::error::Error;
 use std::time::Duration;
 
-use text_io::read;
+// use text_io::read;
 use anyhow;
 
 use clap::Parser;
@@ -105,7 +104,7 @@ async fn disconnect_periph(p: &PlatformPeripheral) {
 fn press_enter(prompt: &str) {
     println!("{prompt}");
     let mut _input = String::new();
-    match(std::io::stdin().read_line(&mut _input)) {
+    match std::io::stdin().read_line(&mut _input) {
         Ok(_good) => {},
         Err(_bad) => {}
     }
