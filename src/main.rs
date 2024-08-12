@@ -10,8 +10,9 @@ use clap::Parser;
 use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
 
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as ApiPeripheral, ScanFilter,
-    WriteType,
+    Central, CharPropFlags, Characteristic, Manager as _,
+    Peripheral as ApiPeripheral, PeripheralProperties,
+    ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
@@ -46,6 +47,28 @@ const UART_TX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400003_B5A3_F393_E0A9_E50E24
 //     }
 //     return false;
 // }
+//
+
+// this is a pure function; output is a strict function of input
+fn periph_desc_string(props: &PeripheralProperties) -> String {
+    let mut dlist: Vec<String> = vec![]; // desc list
+    // name first
+    if let Some(name) = &props.local_name {
+        dlist.push(format!("name={}", name));
+    }
+
+    // rssi next
+    if let Some(rssi) = &props.rssi {
+        dlist.push(format!("rssi={}", rssi));
+    }
+
+    // addr next
+    dlist.push(format!("addr={}", props.address));
+
+    // return a joined version as the output
+    dlist.join(" : ")
+}
+
 
 async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
     // INFO: keep scanning until we find our peripheral
@@ -65,12 +88,8 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
         for p in &peripherals {
             pstrings.push(match p.properties().await {
                 Ok(Some(props)) => {
-                    if let Some(name) = props.local_name {
-                        format!("{} : {} ({:?})", name, props.address, props.address_type)
-                    } else {
-                        format!("{} ({:?})", props.address, props.address_type)
-                    }
-                }
+                    periph_desc_string(&props)
+                },
                 _ => {
                     format!("ERR: unable to fetch properties")
                 }
@@ -174,12 +193,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Obtained chars = {chars:?}");
 
     println!("Connected, configuring NUS chars + notifications...");
+    let mut nus_recv: &Characteristic = &chars.first().unwrap();
     let mut nus_send: &Characteristic = &chars.first().unwrap();
     let mut subscribed_tx = false;
     let mut found_rx: bool = false;
     for c in chars.iter() {
         match c.uuid {
             UART_TX_CHAR_UUID => {
+                nus_recv = c;
                 if c.properties.contains(CharPropFlags::NOTIFY) {
                     println!("Subscribing to characteristic {:?}", c);
                     if let Ok(_good) = periph.subscribe(c).await {
@@ -208,17 +229,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut notif_stream = periph.notifications().await?;
     // TODO: determine if we need to cleanly stop this task
     let notifs_handler = tokio::spawn(async move {
+        let mut notif_count = 0;
         loop {
             if let Some(data) = notif_stream.next().await {
-                // println!(
-                //     "Received data from NUS-TX [{:?}]: {:?}",
-                //     data.uuid, data.value
-                // );
-                let s = match String::from_utf8(data.value) {
-                    Ok(v) => v,
-                    Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
-                };
-                print!("{s}");
+                let mut v: Vec<u8> = vec![];
+                // data.value.clone_from
+                let v = data.value;
+
+                // data.value.clone();
+                // NOTE: rust is tricky about ownership, we actually need
+                let vclone= v.clone();
+                match String::from_utf8(v) {
+                    Ok(s) => {
+                        // file_logger.info() TODO: file logger on NUS_TX string msgs
+                        // println!("['TX', {notif_count}, \"{s}\"]");
+                        print!("{s}");
+                    },
+                    Err(e) => {
+                        // file_logger.info() TODO: file logger on NUS_TX bytes msgs
+                        // println!("['TX', {notif_count}, {:?}]", &vclone);
+                        println!("TXNUS: non-utf-data = {vclone:?}");
+                    }
+                }
+
+                // NOTE: incr count
+                notif_count += 1;
             }
         }
     });
@@ -268,9 +303,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-    println!("Stopping tokio task handler (notifications)...");
-    notifs_handler.abort();
+
+
+    print!("Disconnecting peripheral...");
     disconnect_periph(&periph).await;
+    println!(" [DONE]");
+
+    print!("Stopping tokio task handler (notifications)... ");
+    notifs_handler.abort();
+    println!(" [DONE]");
+
     press_enter("Press <ENTER> to exit");
 
     Ok(())
