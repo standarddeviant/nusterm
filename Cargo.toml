@@ -6,11 +6,13 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.86"
 btleplug = "0.11.5"
+chrono = "0.4.38"
 clap = {version = "4.5.15", features = ["derive"]}
 futures = "0.3.30"
 inquire = {version = "0.7.5"}
+log = "0.4.22"
 pretty_env_logger = "0.5.0"
-# tokio = { version = "1.39.2", features = ["full"] }
 reedline = "0.33.0"
+simplelog = "0.12.2"
 tokio = { version = "1.35.1", features = ["macros", "rt", "rt-multi-thread"] }
 uuid = "1.10.0"

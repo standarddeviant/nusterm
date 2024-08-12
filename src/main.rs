@@ -1,13 +1,17 @@
 // Create a default reedline object to handle user input
 
 use std::error::Error;
+use std::fs::{create_dir_all, File};
+use std::path::Path;
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 // use text_io::read;
 use anyhow;
+use chrono::Local;
 
 use clap::Parser;
-use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
+use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, Reedline, Signal};
 
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _,
@@ -21,6 +25,11 @@ use tokio::time;
 use uuid::Uuid;
 
 use inquire::Select;
+
+use log::{debug, info, warn, error};
+use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
+                SimpleLogger, TerminalMode, WriteLogger};
+
 
 // NOTE: use clap for cli args
 // const PERIPHERAL_NAME_MATCH_FILTER: &str = "Neuro";
@@ -74,7 +83,7 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
     // INFO: keep scanning until we find our peripheral
     loop {
         // for adapter in adapter_list.iter() {
-        println!("Starting scan...");
+        info!("Starting scan...");
 
         // let nus_scan_filter = ScanFilter { services: vec![UART_SERVICE_UUID] };
         let nus_scan_filter = ScanFilter { services: vec![] };
@@ -106,7 +115,7 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
             let index = pstrings.iter().position(|s| pdesc.eq(s)).unwrap();
             let periph = &peripherals[index - 1]; // NOTE: minute-one is b/c "NOT IN LIST" above
             if let Err(err) = periph.connect().await {
-                eprintln!("Error connecting to peripheral: {}", err);
+                error!("Error connecting to peripheral: {}", err);
                 continue;
             }
 
@@ -120,19 +129,19 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
 }
 
 fn print_nus_failure() {
-    println!("ERROR: Unable to properly configure the BLE characteristics required to use NUS");
-    println!("ERROR: NOTE: NUS_TX (BLE notifs from periph) = {UART_TX_CHAR_UUID}");
-    println!("ERROR: NOTE: NUS_RX (BLE write to periph) = {UART_RX_CHAR_UUID}");
+    error!("Unable to properly configure the BLE characteristics required to use NUS");
+    error!("NOTE: NUS_TX (BLE notifs from periph) = {UART_TX_CHAR_UUID}");
+    error!("NOTE: NUS_RX (BLE write to periph) = {UART_RX_CHAR_UUID}");
 }
 
 async fn disconnect_periph(p: &PlatformPeripheral) {
     let addr = p.address();
-    print!("Disconnecting from {:?}... ", addr);
+    debug!("Disconnecting from {:?}... ", addr);
     match p.disconnect().await {
         Ok(_good) => {}
         Err(_bad) => { /* TODO: handle error */ }
     }
-    println!("[DONE]");
+    debug!("[DONE]");
 }
 
 fn press_enter(prompt: &str) {
@@ -144,34 +153,70 @@ fn press_enter(prompt: &str) {
     }
 }
 
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // NOTE: init logger?
-    pretty_env_logger::init();
+    // NOTE: set up logger
+    let mut logs_dir_path= Path::new(".");
+    let logs_dir_path = logs_dir_path.join(Path::new("LOGS"));
+    match create_dir_all(logs_dir_path.clone()) {
+        Ok(_good) => {},
+        Err(_bad) => {
+            // TODO: handle error
+        },
+    }
+
+    let dt = Local::now();
+    println!("now = {dt:?}");
+    // let log_file_name= Path::new(dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
+    let log_file_name = format!("{}", dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
+    let logs_file_path = logs_dir_path.join(log_file_name);
+    let log_config = ConfigBuilder::new()
+        .set_time_format_rfc2822()
+        .set_time_offset_to_local().unwrap()
+        .build();
+    CombinedLogger::init(vec![
+        #[cfg(feature = "termcolor")]
+        TermLogger::new(
+            LevelFilter::Info,
+            log_config.clone(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+
+        #[cfg(not(feature = "termcolor"))]
+        SimpleLogger::new(LevelFilter::Info, log_config.clone());
+
+        WriteLogger::new(
+            LevelFilter::Debug,
+            log_config.clone(),
+            File::create(logs_file_path).unwrap(),
+        ),
+    ]).unwrap();
+
 
     // NOTE: parse args
     let args = Args::parse();
     // print args
-    println!("args = {args:?}");
+    info!("args = {args:?}");
 
     // NOTE: init btleplug
     let manager = Manager::new().await?;
     let adapter_list = manager.adapters().await?;
     if adapter_list.is_empty() {
-        eprintln!("No Bluetooth adapters found");
+        error!("No Bluetooth adapters found");
     }
 
-    println!("Found {} BLE adapter(s)", adapter_list.len());
-    println!("Setting up BLE adapter...");
+    info!("Found {} BLE adapter(s)", adapter_list.len());
+    info!("Setting up BLE adapter...");
     let adapter = &adapter_list[0];
     if let Ok(adapter_info) = adapter.adapter_info().await {
-        println!("adapter = {:?}", adapter_info);
+        info!("adapter = {:?}", adapter_info);
     }
 
     // NOTE: this connects the adapter (i.e. the central) to the peripheral inside the function
     // NOTE: it modifies the state of adapter
     let pdesc = connect_periph(&adapter).await?;
-    println!("Connected to {:?}", pdesc);
 
     // get access to what should be the only connected peripheral
     let plist = adapter.peripherals().await.unwrap();
@@ -184,15 +229,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
     }
-    println!("Connected to {periph:?}");
+    info!("Connected to {:?}", pdesc);
+    debug!("Connected to {periph:?}");
 
+    info!("Discovering services...");
     periph.discover_services().await?;
-    println!("Discovered services...");
 
+    info!("Configuring NUS chars + notifications...");
     let chars = periph.characteristics();
-    println!("Obtained chars = {chars:?}");
-
-    println!("Connected, configuring NUS chars + notifications...");
     let mut nus_recv: &Characteristic = &chars.first().unwrap();
     let mut nus_send: &Characteristic = &chars.first().unwrap();
     let mut subscribed_tx = false;
@@ -200,16 +244,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for c in chars.iter() {
         match c.uuid {
             UART_TX_CHAR_UUID => {
+                debug!("found NUS_TX (nus_recv) characteristic");
                 nus_recv = c;
                 if c.properties.contains(CharPropFlags::NOTIFY) {
-                    println!("Subscribing to characteristic {:?}", c);
+                    debug!("subscribing to characteristic {:?}", c);
                     if let Ok(_good) = periph.subscribe(c).await {
                         subscribed_tx = true;
                     }
                 }
             }
             UART_RX_CHAR_UUID => {
-                println!("Setting nus_send to characteristic {:?}", c);
+                debug!("found NUS_RX (nus_send) characteristic");
                 found_rx = true;
                 nus_send = c;
             }
@@ -217,6 +262,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // if we didn't set up the NUS chars, then bail and inform user
     if !(subscribed_tx && found_rx) {
         print_nus_failure();
         disconnect_periph(&periph).await;
@@ -225,30 +271,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(42000);
     }
 
-    println!("Spawning tokio task as handler for notifications");
+    debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await?;
-    // TODO: determine if we need to cleanly stop this task
     let notifs_handler = tokio::spawn(async move {
         let mut notif_count = 0;
         loop {
             if let Some(data) = notif_stream.next().await {
-                let mut v: Vec<u8> = vec![];
-                // data.value.clone_from
                 let v = data.value;
-
-                // data.value.clone();
-                // NOTE: rust is tricky about ownership, we actually need
+                // NOTE: rust is tricky about ownership, we actually need an extra because:
+                //       1. String::from_utf8(v) consumes v
+                //       2. Err(_e) consumes vclone
                 let vclone= v.clone();
                 match String::from_utf8(v) {
                     Ok(s) => {
                         // file_logger.info() TODO: file logger on NUS_TX string msgs
                         // println!("['TX', {notif_count}, \"{s}\"]");
+                        // TODO: handle newlines in the least-messy way possible
                         print!("{s}");
                     },
-                    Err(e) => {
+                    Err(_e) => {
                         // file_logger.info() TODO: file logger on NUS_TX bytes msgs
                         // println!("['TX', {notif_count}, {:?}]", &vclone);
-                        println!("TXNUS: non-utf-data = {vclone:?}");
+                        warn!("TXNUS: non-utf-data = {vclone:?}");
                     }
                 }
 
@@ -258,6 +302,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    println!("");
+    info!("NUS connection is now active");
     // NOTE: init reedline
     let mut line_editor = Reedline::create();
     // TODO: make getting props/formatting an async helper to hide the mess
@@ -287,10 +333,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await;
                 match wr_result {
                     Ok(_good) => {
-                        // println!("Success = {good:?}");
+                        // println!();
+                        line_editor.run_edit_commands(&[
+                            // EditCommand::MoveToLineEnd {select: false},
+                            EditCommand::MoveToEnd {select: false},
+
+                        ])
                     }
                     Err(bad) => {
-                        println!("Error writing to {nus_send:?} = {bad:?}");
+                        error!("Error writing to {nus_send:?} = {bad:?}");
                         /* TODO - handle error */
                     }
                 }
@@ -299,19 +350,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 break;
             }
             x => {
-                println!("Event: {:?}", x);
+                warn!("Event: {:?}", x);
             }
         }
     }
 
+    info!("nusterm is exiting...");
 
-    print!("Disconnecting peripheral...");
+    // NOTE: disconnect periph issues its own print/info statements
     disconnect_periph(&periph).await;
-    println!(" [DONE]");
 
-    print!("Stopping tokio task handler (notifications)... ");
+    debug!("Stopping tokio task handler (notifications)... ");
     notifs_handler.abort();
-    println!(" [DONE]");
+    debug!("[DONE]");
 
     press_enter("Press <ENTER> to exit");
 
