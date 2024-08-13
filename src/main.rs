@@ -2,16 +2,16 @@
 
 use std::error::Error;
 use std::fs::{create_dir_all, File};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 // use text_io::read;
 use anyhow;
-use chrono::Local;
+use chrono::{Datelike, Local};
 
 use clap::Parser;
-use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, Reedline, Signal};
+use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, ExternalPrinter, Reedline, Signal};
 
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _,
@@ -21,6 +21,7 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
 
+use tokio::sync::mpsc;
 use tokio::time;
 use uuid::Uuid;
 
@@ -67,8 +68,8 @@ fn periph_desc_string(props: &PeripheralProperties) -> String {
     }
 
     // rssi next
-    if let Some(rssi) = &props.rssi {
-        dlist.push(format!("rssi={}", rssi));
+    if let Some(rssi_val) = &props.rssi {
+        dlist.push(format!("rssi={}", rssi_val));
     }
 
     // addr next
@@ -119,8 +120,6 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
                 continue;
             }
 
-            // let platform_periph: PlatformPeripheral = periph
-
             // NOTE: after successful connection, return a description string to caller
             // let tmp = periph.deref();
             return Ok(pdesc);
@@ -156,9 +155,13 @@ fn press_enter(prompt: &str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
     // NOTE: set up logger
-    let mut logs_dir_path= Path::new(".");
-    let logs_dir_path = logs_dir_path.join(Path::new("LOGS"));
+    let dt = Local::now();
+    let mut logs_dir_path = PathBuf::new();
+    logs_dir_path.push(".");
+    logs_dir_path.push("LOGS");
+    logs_dir_path.push(dt.format("%y_%m_%b").to_string());
     match create_dir_all(logs_dir_path.clone()) {
         Ok(_good) => {},
         Err(_bad) => {
@@ -166,11 +169,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     }
 
-    let dt = Local::now();
+    // NOTE: parse args
+    let args = Args::parse();
+    // print args
+    info!("args = {args:?}");
+
     println!("now = {dt:?}");
     // let log_file_name= Path::new(dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
-    let log_file_name = format!("{}", dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
-    let logs_file_path = logs_dir_path.join(log_file_name);
+    let log_start_str = dt.format("%y-%m-%d_%H_%M_%S").to_string();
+
+    let code_log_fname = format!("nusterm_{}.log", log_start_str);
+    let code_log_fpath = logs_dir_path.join(code_log_fname);
+
     let log_config = ConfigBuilder::new()
         .set_time_format_rfc2822()
         .set_time_offset_to_local().unwrap()
@@ -185,20 +195,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ),
 
         #[cfg(not(feature = "termcolor"))]
-        SimpleLogger::new(LevelFilter::Info, log_config.clone());
+        SimpleLogger::new(LevelFilter::Info, log_config.clone()),
 
         WriteLogger::new(
             LevelFilter::Debug,
             log_config.clone(),
-            File::create(logs_file_path).unwrap(),
+            File::create(code_log_fpath).unwrap(),
         ),
     ]).unwrap();
 
-
-    // NOTE: parse args
-    let args = Args::parse();
-    // print args
-    info!("args = {args:?}");
 
     // NOTE: init btleplug
     let manager = Manager::new().await?;
@@ -213,6 +218,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Ok(adapter_info) = adapter.adapter_info().await {
         info!("adapter = {:?}", adapter_info);
     }
+
 
     // NOTE: this connects the adapter (i.e. the central) to the peripheral inside the function
     // NOTE: it modifies the state of adapter
@@ -271,6 +277,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(42000);
     }
 
+
+    // Create external printer
+    // let printer: ExternalPrinter<String> = ExternalPrinter::default();
+    // let mut printer: ExternalPrinter<String> = ExternalPrinter::new(100);
+    // let rxSender = printer.sender();
+
     debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await?;
     let notifs_handler = tokio::spawn(async move {
@@ -281,18 +293,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 // NOTE: rust is tricky about ownership, we actually need an extra because:
                 //       1. String::from_utf8(v) consumes v
                 //       2. Err(_e) consumes vclone
-                let vclone= v.clone();
-                match String::from_utf8(v) {
+                match String::from_utf8(v.clone()) {
                     Ok(s) => {
-                        // file_logger.info() TODO: file logger on NUS_TX string msgs
-                        // println!("['TX', {notif_count}, \"{s}\"]");
-                        // TODO: handle newlines in the least-messy way possible
+                        debug!("{{from_dut: '{s}'}}");
+                        // match rxSender.send(s) {
+                        //     Ok(_good) => {},
+                        //     Err(_bad) => {/* TODO - handle error */},
+                        // }
                         print!("{s}");
                     },
                     Err(_e) => {
-                        // file_logger.info() TODO: file logger on NUS_TX bytes msgs
-                        // println!("['TX', {notif_count}, {:?}]", &vclone);
-                        warn!("TXNUS: non-utf-data = {vclone:?}");
+                        warn!("NUS_TX: non-utf-data = {:?}", v.clone());
+                        debug!("{{from_dut: '{:?}'}}", v.clone());
                     }
                 }
 
@@ -304,17 +316,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("");
     info!("NUS connection is now active");
+
     // NOTE: init reedline
     let mut line_editor = Reedline::create();
-    // TODO: make getting props/formatting an async helper to hide the mess
-    let props = periph.properties().await.unwrap().unwrap();
-    let pdesc = {
-        if let Some(name) = props.local_name {
-            format!("{} : {} ({:?})", name, props.address, props.address_type)
-        } else {
-            format!("{} ({:?})", props.address, props.address_type)
-        }
-    };
+
+    // NOTE: obtain + fulfill props
+    let mut props = periph.properties().await.unwrap().unwrap();
+    props.rssi = None; // ignore RSSI for desc string
+    let pdesc = periph_desc_string(&props);
+
     let prompt = DefaultPrompt {
         left_prompt: DefaultPromptSegment::CurrentDateTime,
         right_prompt: DefaultPromptSegment::Basic(pdesc),
@@ -333,12 +343,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await;
                 match wr_result {
                     Ok(_good) => {
-                        // println!();
-                        line_editor.run_edit_commands(&[
-                            // EditCommand::MoveToLineEnd {select: false},
-                            EditCommand::MoveToEnd {select: false},
+                        debug!("{{to_dut: '{}'}}", buffer.clone());
+                        // match rxSender.send(buffer.clone()) {
+                        //     Ok(_good) => {},
+                        //     Err(_bad) => {/* TODO - handle error */},
+                        // }
+                        // line_editor.run_edit_commands(&[
+                        //     // EditCommand::MoveToLineEnd {select: false},
+                        //     // EditCommand::InsertNewline
+                        //     EditCommand::MoveToLineStart {select: false} 
+                        //     // EditCommand::MoveToEnd {select: false},
+                        // ]);
+                        // print!("{tmp_s}");
+                        // loop {
+                        //     match printer.get_line() {
+                        //         Some(line) => {
+                        //             print!("{line}");
+                        //         },
+                        //         None => {
+                        //             break;
+                        //         }
+                        //     }
+                        // }
 
-                        ])
                     }
                     Err(bad) => {
                         error!("Error writing to {nus_send:?} = {bad:?}");
@@ -364,7 +391,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     notifs_handler.abort();
     debug!("[DONE]");
 
-    press_enter("Press <ENTER> to exit");
+    // TODO: put helpful info in this 'exit message'
+    press_enter("All done\nPress <ENTER> to exit");
 
     Ok(())
 }
