@@ -348,12 +348,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         //     Ok(_good) => {},
                         //     Err(_bad) => {/* TODO - handle error */},
                         // }
-                        // line_editor.run_edit_commands(&[
-                        //     // EditCommand::MoveToLineEnd {select: false},
-                        //     // EditCommand::InsertNewline
-                        //     EditCommand::MoveToLineStart {select: false} 
-                        //     // EditCommand::MoveToEnd {select: false},
-                        // ]);
+                        line_editor.run_edit_commands(&[
+                            EditCommand::MoveToEnd{select: false}
+                            // EditCommand::MoveToLineEnd {select: false},
+                            // EditCommand::InsertNewline,
+                            // EditCommand::MoveToLineStart {select: false},
+                        ]);
                         // print!("{tmp_s}");
                         // loop {
                         //     match printer.get_line() {
