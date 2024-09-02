@@ -11,9 +11,10 @@ use anyhow;
 use chrono::{Datelike, Local};
 
 use clap::Parser;
+use futures::channel::mpsc::Sender;
 // use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, ExternalPrinter, Reedline, Signal};
 use rustyline::error::ReadlineError;
-use rustyline::{DefaultEditor, Result};
+// use rustyline::{DefaultEditor, Result};
 
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _,
@@ -23,6 +24,7 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
 
+use tokio::sync::mpsc;
 // use tokio::sync::mpsc;
 use tokio::time;
 use uuid::Uuid;
@@ -34,6 +36,29 @@ use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
                 SimpleLogger, TerminalMode, WriteLogger};
 
 
+/// This example is taken from https://raw.githubusercontent.com/fdehau/tui-rs/master/examples/user_input.rs
+use ratatui::prelude::*;
+use ratatui::{
+    crossterm::{
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+        execute,
+        terminal::{
+            disable_raw_mode, enable_raw_mode, EnterAlternateScreen,
+            LeaveAlternateScreen,
+        },
+    },
+    widgets::{Block, Borders, List, ListItem, Paragraph},
+};
+// use std::{error::Error, io};
+use std::io;
+use tui_input::backend::crossterm::EventHandler;
+use tui_input::Input;
+
+enum InputMode {
+    Normal,
+    Editing,
+}
+
 // NOTE: use clap for cli args
 // const PERIPHERAL_NAME_MATCH_FILTER: &str = "Neuro";
 #[derive(Debug, Parser)]
@@ -44,6 +69,44 @@ struct Args {
     #[arg(short = 'f', long = "nus-filter", default_value_t = false)]
     nus_filter: bool,
 }
+
+/// App holds the state of the application
+struct ConnectedApp {
+    /// Current value of the input box
+    input: Input,
+    /// Current input mode
+    input_mode: InputMode,
+    /// History of recorded messages
+    messages: Vec<String>,
+    periph: PlatformPeripheral,
+    /// Sink for Linebox
+    // linebox_send: mpsc::Sender<String>,
+    nus_send: Characteristic,
+    /// Sink for Messages
+    // msg_recv: mpsc::Receiver<String>,
+    nus_recv: Characteristic,
+}
+
+impl ConnectedApp {
+    fn from_periph_send_recv(periph: PlatformPeripheral, nus_send: Characteristic, nus_recv: Characteristic) -> ConnectedApp {
+        ConnectedApp {
+            input: Input::default(),
+            input_mode: InputMode::Normal,
+            messages: Vec::new(),
+            periph,
+            nus_send,
+            nus_recv,
+        }
+    }
+    async fn nus_write(&mut self, s: String) {
+        let b = s.as_bytes();
+        self.periph.write(&self.nus_send, b, WriteType::WithoutResponse).await;
+    }
+}
+
+// impl Default for ConnectedApp
+//     fn default() -> ConnectedApp
+//
 
 // NOTE: BLE UUIDs for NUS copied from bleak example, uart_service.py
 // UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -82,7 +145,7 @@ fn periph_desc_string(props: &PeripheralProperties) -> String {
 }
 
 
-async fn connect_periph(adapter: &Adapter) -> Result<String> {
+async fn connect_periph(adapter: &Adapter) -> anyhow::Result<String> {
     // INFO: keep scanning until we find our peripheral
     loop {
         // for adapter in adapter_list.iter() {
@@ -156,7 +219,7 @@ fn press_enter(prompt: &str) {
 
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
 
     // NOTE: set up logger
     let dt = Local::now();
@@ -319,119 +382,37 @@ async fn main() -> Result<()> {
     println!("");
     info!("NUS connection is now active");
 
-    // START REEDLINE IMPL
-    // START REEDLINE IMPL
-    // START REEDLINE IMPL
-    // NOTE: init reedline
-    // let mut line_editor = Reedline::create();
+    // setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    // NOTE: obtain + fulfill props
-    // let mut props = periph.properties().await.unwrap().unwrap();
-    // props.rssi = None; // ignore RSSI for desc string
-    // let pdesc = periph_desc_string(&props);
-    //
-    // let prompt = DefaultPrompt {
-    //     left_prompt: DefaultPromptSegment::CurrentDateTime,
-    //     right_prompt: DefaultPromptSegment::Basic(pdesc),
-    // };
-    //
-    // loop {
-    //     let sig = line_editor.read_line(&prompt);
-    //     match sig {
-    //         Ok(Signal::Success(buffer)) => {
-    //             // NOTE: add newline char
-    //             let tmp_s: String = format!("{buffer}\n");
-    //             let tmp_bytes = tmp_s.as_bytes();
-    //             // println!("sending -->{:?}<--", buffer);
-    //             let wr_result = periph
-    //                 .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-    //                 .await;
-    //             match wr_result {
-    //                 Ok(_good) => {
-    //                     debug!("{{to_dut: '{}'}}", buffer.clone());
-    //                     // match rxSender.send(buffer.clone()) {
-    //                     //     Ok(_good) => {},
-    //                     //     Err(_bad) => {/* TODO - handle error */},
-    //                     // }
-    //                     line_editor.run_edit_commands(&[
-    //                         EditCommand::MoveToEnd{select: false}
-    //                         // EditCommand::MoveToLineEnd {select: false},
-    //                         // EditCommand::InsertNewline,
-    //                         // EditCommand::MoveToLineStart {select: false},
-    //                     ]);
-    //                     // print!("{tmp_s}");
-    //                     // loop {
-    //                     //     match printer.get_line() {
-    //                     //         Some(line) => {
-    //                     //             print!("{line}");
-    //                     //         },
-    //                     //         None => {
-    //                     //             break;
-    //                     //         }
-    //                     //     }
-    //                     // }
-    //
-    //                 }
-    //                 Err(bad) => {
-    //                     error!("Error writing to {nus_send:?} = {bad:?}");
-    //                     /* TODO - handle error */
-    //                 }
-    //             }
-    //         }
-    //         Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
-    //             break;
-    //         }
-    //         x => {
-    //             warn!("Event: {:?}", x);
-    //         }
-    //     }
-    // }
-    // END REEDLINE IMPL
-    // END REEDLINE IMPL
-    // END REEDLINE IMPL
+    // let (linebox_send, linebox_recv) = mpsc::channel(8);
+    // let (msg_send, msg_recv) = mpsc::channel(8);
 
-    // `()` can be used when no completer is required
-    let mut line_editor = DefaultEditor::new()?;
-    // #[cfg(feature = "with-file-history")]
-    // if line_editor.load_history("history.txt").is_err() {
-    //     println!("No previous history.");
-    // }
-    loop {
-        let readline = line_editor.readline(">> ");
-        match readline {
-            Ok(line) => {
-                // NOTE: add newline char
-                let tmp_s: String = format!("{line}\n");
-                let tmp_bytes = tmp_s.as_bytes();
-                // println!("sending -->{:?}<--", buffer);
-                let wr_result = periph
-                    .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-                    .await;
-                match wr_result {
-                    Ok(_good) => {
-                        debug!("{{to_dut: '{}'}}", line.clone());
-                        // match rxSender.send(buffer.clone()) {
-                    }
-                    Err(_bad) => {
-                        // TODO - handle BLE write error
-                    }
-                }
-                // line_editor.add_history_entry(line.as_str());
-                println!("sent: {}", line);
-            },
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break
-            },
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break
-            },
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break
-            }
-        }
+
+    // create app and run it
+    // let app = ConnectedApp::default();
+    let app = ConnectedApp::from_periph_send_recv(
+        periph.clone(),
+        nus_send.clone(),
+        nus_recv.clone(),
+    );
+    let res = run_app(&mut terminal, app).await;
+
+    // restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = res {
+        println!("{:?}", err)
     }
 
     info!("nusterm is exiting...");
@@ -450,4 +431,154 @@ async fn main() -> Result<()> {
     // line_editor.save_history("history.txt");
     Ok(())
 
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: ConnectedApp) -> io::Result<()> {
+    loop {
+        terminal.draw(|f| ui(f, &app))?;
+
+        if let Event::Key(key) = event::read()? {
+            match app.input_mode {
+                InputMode::Normal => match key.code {
+                    KeyCode::Char('e') => {
+                        app.input_mode = InputMode::Editing;
+                    }
+                    KeyCode::Char('q') => {
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                InputMode::Editing => match key.code {
+                    KeyCode::Enter => {
+                        // FIXME: support flexible newline string here
+                        let app_msg: String = format!("<SEND='{}'>", app.input.value());
+                        app.messages.push(app_msg); // app.input.value().into());
+                                                    //
+                        let ble_msg = format!("{}\n", app.input.value());
+                        app.nus_write(ble_msg).await;
+                        // let wr_result = app.periph
+                            // .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
+                            // .await;
+                        // app.nus_recv
+                        app.input.reset();
+                    }
+                    KeyCode::Esc => {
+                        app.input_mode = InputMode::Normal;
+                    }
+                    _ => {
+                        app.input.handle_event(&Event::Key(key));
+                    }
+                },
+            }
+        }
+    }
+}
+
+fn ui(f: &mut Frame, app: &ConnectedApp) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(2)
+        .constraints(
+            [
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(1),
+            ]
+            .as_ref(),
+        )
+        .split(f.area());
+
+    let (msg, style) = match app.input_mode {
+        InputMode::Normal => (
+            vec![
+                Span::raw("Press "),
+                Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to exit, "),
+                Span::styled("e", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to start editing."),
+            ],
+            Style::default().add_modifier(Modifier::RAPID_BLINK),
+        ),
+        InputMode::Editing => (
+            vec![
+                Span::raw("Press "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to stop editing, "),
+                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to record the message"),
+            ],
+            Style::default(),
+        ),
+    };
+    let text = Text::from(Line::from(msg)).style(style);
+    let help_message = Paragraph::new(text);
+    f.render_widget(help_message, chunks[0]);
+
+    let width = chunks[0].width.max(3) - 3; // keep 2 for borders and 1 for cursor
+
+    let scroll = app.input.visual_scroll(width as usize);
+    let input = Paragraph::new(app.input.value())
+        .style(match app.input_mode {
+            InputMode::Normal => Style::default(),
+            InputMode::Editing => Style::default().fg(Color::Yellow),
+        })
+        .scroll((0, scroll as u16))
+        .block(Block::default().borders(Borders::ALL).title("Input"));
+    f.render_widget(input, chunks[1]);
+    match app.input_mode {
+        InputMode::Normal =>
+            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
+            {}
+
+        InputMode::Editing => {
+            // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
+            f.set_cursor_position((
+                // Put cursor past the end of the input text
+                chunks[1].x
+                    + ((app.input.visual_cursor()).max(scroll) - scroll) as u16
+                    + 1,
+                // Move one line down, from the border to the input line
+                chunks[1].y + 1,
+            ))
+        }
+    }
+
+    let messages: Vec<ListItem> = app
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let content = vec![Line::from(Span::raw(format!("{}: {}", i, m)))];
+            ListItem::new(content)
+        })
+        .collect();
+    let messages = List::new(messages)
+        .block(Block::default().borders(Borders::ALL).title("Messages"));
+    f.render_widget(messages, chunks[2]);
 }

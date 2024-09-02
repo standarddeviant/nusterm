@@ -12,7 +12,9 @@ futures = "0.3.30"
 inquire = {version = "0.7.5"}
 log = "0.4.22"
 pretty_env_logger = "0.5.0"
+ratatui = "0.28.1"
 rustyline = {version = "14.0.0", features = ["with-file-history"]}
 simplelog = "0.12.2"
 tokio = { version = "1.35.1", features = ["macros", "rt", "rt-multi-thread"] }
+tui-input = "0.10.1"
 uuid = "1.10.0"
