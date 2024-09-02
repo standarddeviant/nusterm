@@ -34,6 +34,8 @@ use log::{debug, info, warn, error};
 use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
                 SimpleLogger, TerminalMode, WriteLogger};
 
+use ansi_term::Colour::{Blue, Yellow, White, Red, RGB};
+
 
 // NOTE: use clap for cli args
 // const PERIPHERAL_NAME_MATCH_FILTER: &str = "Neuro";
@@ -291,7 +293,7 @@ async fn main() -> Result<()> {
 
     debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await.unwrap();
-    let (mut ble_notif_recv, mut ble_notif_send) = tokio::sync::mpsc::channel::<String>(8);
+    // let (mut ble_notif_recv, mut ble_notif_send) = tokio::sync::mpsc::channel::<String>(8);
     // let mut notif_recv_chan = tokio::sync::mpsc::channel()
     let notifs_handler = tokio::spawn(async move {
         let mut notif_count = 0;
@@ -305,13 +307,14 @@ async fn main() -> Result<()> {
                 // let mut print_ref: &ExternalPrinter = &printer;
                 match String::from_utf8(v.clone()) {
                     Ok(s) => {
-                        info!("{{from_dut: '{s}'}}");
+                        debug!("{{from_dut: '{s}'}}");
                         // match rxSender.send(s) {
                         //     Ok(_good) => {},
                         //     Err(_bad) => {/* TODO - handle error */},
                         // }
                         // printer.print(s.clone()).expect("hmm");
                         // print!("{s}");
+                        print!("{}", Yellow.on(RGB(0, 0, 50)).paint(s));
                     },
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
@@ -419,6 +422,7 @@ async fn main() -> Result<()> {
                 match wr_result {
                     Ok(_good) => {
                         debug!("{{to_dut: '{}'}}", line.clone());
+                        println!("[SENT='{}']", White.on(RGB(100, 0, 0)).bold().paint(line.clone().trim()));
                         // match rxSender.send(buffer.clone()) {
                     }
                     Err(_bad) => {
@@ -427,7 +431,7 @@ async fn main() -> Result<()> {
                 }
                 // line_editor.add_history_entry(line.as_str());
                 // println!("sent: {}", line);
-                printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
+                // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
