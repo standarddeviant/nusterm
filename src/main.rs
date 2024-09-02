@@ -13,7 +13,7 @@ use chrono::{Datelike, Local};
 use clap::Parser;
 // use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, ExternalPrinter, Reedline, Signal};
 use rustyline::error::ReadlineError;
-use rustyline::{DefaultEditor, Result};
+use rustyline::{DefaultEditor, ExternalPrinter, Result};
 
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _,
@@ -24,6 +24,7 @@ use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
 
 // use tokio::sync::mpsc;
+use tokio;
 use tokio::time;
 use uuid::Uuid;
 
@@ -167,16 +168,19 @@ async fn main() -> Result<()> {
     match create_dir_all(logs_dir_path.clone()) {
         Ok(_good) => {},
         Err(_bad) => {
-            // TODO: handle error
+            // FIXME: handle error
         },
     }
 
+    let mut line_editor = DefaultEditor::new().expect("Can't make line_editor");
+    let mut printer = line_editor.create_external_printer().expect("Can't make ext. printer");
+ 
     // NOTE: parse args
     let args = Args::parse();
     // print args
     info!("args = {args:?}");
 
-    println!("now = {dt:?}");
+    printer.print(format!("now = {dt:?}")).expect("ext. print err");
     // let log_file_name= Path::new(dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
     let log_start_str = dt.format("%y-%m-%d_%H_%M_%S").to_string();
 
@@ -188,16 +192,16 @@ async fn main() -> Result<()> {
         .set_time_offset_to_local().unwrap()
         .build();
     CombinedLogger::init(vec![
-        #[cfg(feature = "termcolor")]
-        TermLogger::new(
-            LevelFilter::Info,
-            log_config.clone(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-
-        #[cfg(not(feature = "termcolor"))]
-        SimpleLogger::new(LevelFilter::Info, log_config.clone()),
+        // #[cfg(feature = "termcolor")]
+        // TermLogger::new(
+        //     LevelFilter::Info,
+        //     log_config.clone(),
+        //     TerminalMode::Mixed,
+        //     ColorChoice::Auto,
+        // ),
+        //
+        // #[cfg(not(feature = "termcolor"))]
+        // SimpleLogger::new(LevelFilter::Info, log_config.clone()),
 
         WriteLogger::new(
             LevelFilter::Debug,
@@ -287,22 +291,27 @@ async fn main() -> Result<()> {
 
     debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await.unwrap();
+    let (mut ble_notif_recv, mut ble_notif_send) = tokio::sync::mpsc::channel::<String>(8);
+    // let mut notif_recv_chan = tokio::sync::mpsc::channel()
     let notifs_handler = tokio::spawn(async move {
         let mut notif_count = 0;
         loop {
             if let Some(data) = notif_stream.next().await {
+                notif_count += 1;
                 let v = data.value;
                 // NOTE: rust is tricky about ownership, we actually need an extra because:
                 //       1. String::from_utf8(v) consumes v
                 //       2. Err(_e) consumes vclone
+                // let mut print_ref: &ExternalPrinter = &printer;
                 match String::from_utf8(v.clone()) {
                     Ok(s) => {
-                        debug!("{{from_dut: '{s}'}}");
+                        info!("{{from_dut: '{s}'}}");
                         // match rxSender.send(s) {
                         //     Ok(_good) => {},
                         //     Err(_bad) => {/* TODO - handle error */},
                         // }
-                        print!("{s}");
+                        // printer.print(s.clone()).expect("hmm");
+                        // print!("{s}");
                     },
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
@@ -391,13 +400,13 @@ async fn main() -> Result<()> {
     // END REEDLINE IMPL
 
     // `()` can be used when no completer is required
-    let mut line_editor = DefaultEditor::new()?;
+
     // #[cfg(feature = "with-file-history")]
     // if line_editor.load_history("history.txt").is_err() {
     //     println!("No previous history.");
     // }
     loop {
-        let readline = line_editor.readline(">> ");
+        let readline = line_editor.readline("> ");
         match readline {
             Ok(line) => {
                 // NOTE: add newline char
@@ -417,7 +426,8 @@ async fn main() -> Result<()> {
                     }
                 }
                 // line_editor.add_history_entry(line.as_str());
-                println!("sent: {}", line);
+                // println!("sent: {}", line);
+                printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
             },
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
