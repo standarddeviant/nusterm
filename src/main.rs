@@ -85,10 +85,11 @@ struct ConnectedApp {
     /// Sink for Messages
     // msg_recv: mpsc::Receiver<String>,
     nus_recv: Characteristic,
+    nus_recv_recv: mpsc::Receiver<String>
 }
 
 impl ConnectedApp {
-    fn from_periph_send_recv(periph: PlatformPeripheral, nus_send: Characteristic, nus_recv: Characteristic) -> ConnectedApp {
+    fn from_periph_send_recv(periph: PlatformPeripheral, nus_send: Characteristic, nus_recv: Characteristic, nus_recv_recv: mpsc::Receiver<String>) -> ConnectedApp {
         ConnectedApp {
             input: Input::default(),
             input_mode: InputMode::Normal,
@@ -96,11 +97,15 @@ impl ConnectedApp {
             periph,
             nus_send,
             nus_recv,
+            nus_recv_recv
         }
     }
     async fn nus_write(&mut self, s: String) {
         let b = s.as_bytes();
-        self.periph.write(&self.nus_send, b, WriteType::WithoutResponse).await;
+        match self.periph.write(&self.nus_send, b, WriteType::WithoutResponse).await {
+            Ok(_good) => {/* TODO: ??? */},
+            Err(_bad) => {/* FIXME: handle err */},
+        }
     }
 }
 
@@ -347,6 +352,7 @@ async fn main() -> anyhow::Result<()> {
     // let printer: ExternalPrinter<String> = ExternalPrinter::default();
     // let mut printer: ExternalPrinter<String> = ExternalPrinter::new(100);
     // let rxSender = printer.sender();
+    let (nusRecvSend, nusRecvRecv) = tokio::sync::mpsc::channel::<String>(8);
 
     debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await.unwrap();
@@ -361,11 +367,10 @@ async fn main() -> anyhow::Result<()> {
                 match String::from_utf8(v.clone()) {
                     Ok(s) => {
                         debug!("{{from_dut: '{s}'}}");
-                        // match rxSender.send(s) {
-                        //     Ok(_good) => {},
-                        //     Err(_bad) => {/* TODO - handle error */},
-                        // }
-                        print!("{s}");
+                        match nusRecvSend.send(s).await {
+                            Ok(_good) => { /* TODO: ???*/ },
+                            Err(_bad) => { /* FIXME: handle err*/ }
+                        };
                     },
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
@@ -379,7 +384,6 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    println!("");
     info!("NUS connection is now active");
 
     // setup terminal
@@ -399,6 +403,7 @@ async fn main() -> anyhow::Result<()> {
         periph.clone(),
         nus_send.clone(),
         nus_recv.clone(),
+        nusRecvRecv
     );
     let res = run_app(&mut terminal, app).await;
 
@@ -433,35 +438,18 @@ async fn main() -> anyhow::Result<()> {
 
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: ConnectedApp) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &app))?;
+        // transfer from nus_recv_recv to app.messages
+        loop {
+            if let Ok(s) = app.nus_recv_recv.try_recv() {
+                // do thing
+                app.messages.push(s);
+                continue
+            }
+            break;
+        }
 
         if let Event::Key(key) = event::read()? {
             match app.input_mode {
@@ -476,16 +464,15 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: ConnectedApp) 
                 },
                 InputMode::Editing => match key.code {
                     KeyCode::Enter => {
+                        if 0 == app.input.value().trim().len() {
+                            continue;
+                        }
                         // FIXME: support flexible newline string here
                         let app_msg: String = format!("<SEND='{}'>", app.input.value());
                         app.messages.push(app_msg); // app.input.value().into());
                                                     //
                         let ble_msg = format!("{}\n", app.input.value());
                         app.nus_write(ble_msg).await;
-                        // let wr_result = app.periph
-                            // .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-                            // .await;
-                        // app.nus_recv
                         app.input.reset();
                     }
                     KeyCode::Esc => {
@@ -568,7 +555,7 @@ fn ui(f: &mut Frame, app: &ConnectedApp) {
             ))
         }
     }
-
+    
     let messages: Vec<ListItem> = app
         .messages
         .iter()
