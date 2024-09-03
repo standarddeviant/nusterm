@@ -34,7 +34,7 @@ use log::{debug, info, warn, error};
 use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
                 SimpleLogger, TerminalMode, WriteLogger};
 
-use ansi_term::Colour::{Blue, Yellow, White, Red, RGB};
+use ansi_term::Colour::{Black, Blue, Yellow, White, Red, RGB};
 
 
 // NOTE: use clap for cli args
@@ -175,14 +175,15 @@ async fn main() -> Result<()> {
     }
 
     let mut line_editor = DefaultEditor::new().expect("Can't make line_editor");
-    let mut printer = line_editor.create_external_printer().expect("Can't make ext. printer");
+    // let mut ep1 = line_editor.create_external_printer().expect("Can't make ext. printer");
+    // let mut ep2 = line_editor.create_external_printer().expect("Can't make ext. printer");
  
     // NOTE: parse args
     let args = Args::parse();
     // print args
     info!("args = {args:?}");
 
-    printer.print(format!("now = {dt:?}")).expect("ext. print err");
+    println!("starting @ {dt:?}");
     // let log_file_name= Path::new(dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
     let log_start_str = dt.format("%y-%m-%d_%H_%M_%S").to_string();
 
@@ -314,7 +315,8 @@ async fn main() -> Result<()> {
                         // }
                         // printer.print(s.clone()).expect("hmm");
                         // print!("{s}");
-                        print!("{}", Yellow.on(RGB(0, 0, 50)).paint(s));
+                        // print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
+                        print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
                     },
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
@@ -331,83 +333,7 @@ async fn main() -> Result<()> {
     println!("");
     info!("NUS connection is now active");
 
-    // START REEDLINE IMPL
-    // START REEDLINE IMPL
-    // START REEDLINE IMPL
-    // NOTE: init reedline
-    // let mut line_editor = Reedline::create();
-
-    // NOTE: obtain + fulfill props
-    // let mut props = periph.properties().await.unwrap().unwrap();
-    // props.rssi = None; // ignore RSSI for desc string
-    // let pdesc = periph_desc_string(&props);
-    //
-    // let prompt = DefaultPrompt {
-    //     left_prompt: DefaultPromptSegment::CurrentDateTime,
-    //     right_prompt: DefaultPromptSegment::Basic(pdesc),
-    // };
-    //
-    // loop {
-    //     let sig = line_editor.read_line(&prompt);
-    //     match sig {
-    //         Ok(Signal::Success(buffer)) => {
-    //             // NOTE: add newline char
-    //             let tmp_s: String = format!("{buffer}\n");
-    //             let tmp_bytes = tmp_s.as_bytes();
-    //             // println!("sending -->{:?}<--", buffer);
-    //             let wr_result = periph
-    //                 .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-    //                 .await;
-    //             match wr_result {
-    //                 Ok(_good) => {
-    //                     debug!("{{to_dut: '{}'}}", buffer.clone());
-    //                     // match rxSender.send(buffer.clone()) {
-    //                     //     Ok(_good) => {},
-    //                     //     Err(_bad) => {/* TODO - handle error */},
-    //                     // }
-    //                     line_editor.run_edit_commands(&[
-    //                         EditCommand::MoveToEnd{select: false}
-    //                         // EditCommand::MoveToLineEnd {select: false},
-    //                         // EditCommand::InsertNewline,
-    //                         // EditCommand::MoveToLineStart {select: false},
-    //                     ]);
-    //                     // print!("{tmp_s}");
-    //                     // loop {
-    //                     //     match printer.get_line() {
-    //                     //         Some(line) => {
-    //                     //             print!("{line}");
-    //                     //         },
-    //                     //         None => {
-    //                     //             break;
-    //                     //         }
-    //                     //     }
-    //                     // }
-    //
-    //                 }
-    //                 Err(bad) => {
-    //                     error!("Error writing to {nus_send:?} = {bad:?}");
-    //                     /* TODO - handle error */
-    //                 }
-    //             }
-    //         }
-    //         Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
-    //             break;
-    //         }
-    //         x => {
-    //             warn!("Event: {:?}", x);
-    //         }
-    //     }
-    // }
-    // END REEDLINE IMPL
-    // END REEDLINE IMPL
-    // END REEDLINE IMPL
-
-    // `()` can be used when no completer is required
-
-    // #[cfg(feature = "with-file-history")]
-    // if line_editor.load_history("history.txt").is_err() {
-    //     println!("No previous history.");
-    // }
+    // INFO: rustyline loop
     loop {
         let readline = line_editor.readline("> ");
         match readline {
@@ -422,7 +348,10 @@ async fn main() -> Result<()> {
                 match wr_result {
                     Ok(_good) => {
                         debug!("{{to_dut: '{}'}}", line.clone());
-                        println!("[SENT='{}']", White.on(RGB(100, 0, 0)).bold().paint(line.clone().trim()));
+                        println!("[SENT='{}' @ {}]", 
+                            Black.on(RGB(0xee, 0xaa, 0xaa)).bold().paint(line.clone().trim()),
+                            Local::now()
+                        );
                         // match rxSender.send(buffer.clone()) {
                     }
                     Err(_bad) => {
