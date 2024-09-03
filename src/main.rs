@@ -192,6 +192,7 @@ async fn main() -> Result<()> {
 
     let log_config = ConfigBuilder::new()
         .set_time_format_rfc2822()
+        .add_filter_ignore(format!("{}","rustyline"))
         // .set_time_offset_to_local().unwrap()
         .build();
     CombinedLogger::init(vec![
