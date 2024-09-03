@@ -11,7 +11,9 @@ use anyhow;
 use chrono::{Datelike, Local};
 
 use clap::Parser;
-use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, ExternalPrinter, Reedline, Signal};
+// use reedline::{DefaultPrompt, DefaultPromptSegment, EditCommand, ExternalPrinter, Reedline, Signal};
+use rustyline::error::ReadlineError;
+use rustyline::{DefaultEditor, ExternalPrinter, Result};
 
 use btleplug::api::{
     Central, CharPropFlags, Characteristic, Manager as _,
@@ -21,7 +23,8 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
 use futures::stream::StreamExt;
 
-use tokio::sync::mpsc;
+// use tokio::sync::mpsc;
+use tokio;
 use tokio::time;
 use uuid::Uuid;
 
@@ -30,6 +33,8 @@ use inquire::Select;
 use log::{debug, info, warn, error};
 use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
                 SimpleLogger, TerminalMode, WriteLogger};
+
+use ansi_term::Colour::{Black, Blue, Yellow, White, Red, RGB};
 
 
 // NOTE: use clap for cli args
@@ -80,7 +85,7 @@ fn periph_desc_string(props: &PeripheralProperties) -> String {
 }
 
 
-async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
+async fn connect_periph(adapter: &Adapter) -> Result<String> {
     // INFO: keep scanning until we find our peripheral
     loop {
         // for adapter in adapter_list.iter() {
@@ -93,7 +98,7 @@ async fn connect_periph(adapter: &Adapter) -> Result<String, anyhow::Error> {
             .await
             .expect("Can't scan BLE adapter for connected devices...");
         time::sleep(Duration::from_secs(5)).await;
-        let peripherals = adapter.peripherals().await?;
+        let peripherals = adapter.peripherals().await.unwrap();
         let mut pstrings: Vec<String> = vec![String::from("NOT IN LIST; KEEP SCANNING")];
         for p in &peripherals {
             pstrings.push(match p.properties().await {
@@ -154,7 +159,7 @@ fn press_enter(prompt: &str) {
 
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
 
     // NOTE: set up logger
     let dt = Local::now();
@@ -165,16 +170,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match create_dir_all(logs_dir_path.clone()) {
         Ok(_good) => {},
         Err(_bad) => {
-            // TODO: handle error
+            // FIXME: handle error
         },
     }
 
+    let mut line_editor = DefaultEditor::new().expect("Can't make line_editor");
+    // let mut ep1 = line_editor.create_external_printer().expect("Can't make ext. printer");
+    // let mut ep2 = line_editor.create_external_printer().expect("Can't make ext. printer");
+ 
     // NOTE: parse args
     let args = Args::parse();
     // print args
     info!("args = {args:?}");
 
-    println!("now = {dt:?}");
+    println!("starting @ {dt:?}");
     // let log_file_name= Path::new(dt.format("nusterm_%y-%m-%d_%H_%M_%S.log"));
     let log_start_str = dt.format("%y-%m-%d_%H_%M_%S").to_string();
 
@@ -186,16 +195,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .set_time_offset_to_local().unwrap()
         .build();
     CombinedLogger::init(vec![
-        #[cfg(feature = "termcolor")]
-        TermLogger::new(
-            LevelFilter::Info,
-            log_config.clone(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-
-        #[cfg(not(feature = "termcolor"))]
-        SimpleLogger::new(LevelFilter::Info, log_config.clone()),
+        // #[cfg(feature = "termcolor")]
+        // TermLogger::new(
+        //     LevelFilter::Info,
+        //     log_config.clone(),
+        //     TerminalMode::Mixed,
+        //     ColorChoice::Auto,
+        // ),
+        //
+        // #[cfg(not(feature = "termcolor"))]
+        // SimpleLogger::new(LevelFilter::Info, log_config.clone()),
 
         WriteLogger::new(
             LevelFilter::Debug,
@@ -206,8 +215,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
     // NOTE: init btleplug
-    let manager = Manager::new().await?;
-    let adapter_list = manager.adapters().await?;
+    let manager = Manager::new().await.unwrap();
+    let adapter_list = manager.adapters().await.unwrap();
     if adapter_list.is_empty() {
         error!("No Bluetooth adapters found");
     }
@@ -239,7 +248,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     debug!("Connected to {periph:?}");
 
     info!("Discovering services...");
-    periph.discover_services().await?;
+    periph.discover_services().await.unwrap();
 
     info!("Configuring NUS chars + notifications...");
     let chars = periph.characteristics();
@@ -284,15 +293,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // let rxSender = printer.sender();
 
     debug!("Spawning tokio task as handler for notifications");
-    let mut notif_stream = periph.notifications().await?;
+    let mut notif_stream = periph.notifications().await.unwrap();
+    // let (mut ble_notif_recv, mut ble_notif_send) = tokio::sync::mpsc::channel::<String>(8);
+    // let mut notif_recv_chan = tokio::sync::mpsc::channel()
     let notifs_handler = tokio::spawn(async move {
         let mut notif_count = 0;
         loop {
             if let Some(data) = notif_stream.next().await {
+                notif_count += 1;
                 let v = data.value;
                 // NOTE: rust is tricky about ownership, we actually need an extra because:
                 //       1. String::from_utf8(v) consumes v
                 //       2. Err(_e) consumes vclone
+                // let mut print_ref: &ExternalPrinter = &printer;
                 match String::from_utf8(v.clone()) {
                     Ok(s) => {
                         debug!("{{from_dut: '{s}'}}");
@@ -300,7 +313,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         //     Ok(_good) => {},
                         //     Err(_bad) => {/* TODO - handle error */},
                         // }
-                        print!("{s}");
+                        // printer.print(s.clone()).expect("hmm");
+                        // print!("{s}");
+                        // print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
+                        print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
                     },
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
@@ -317,25 +333,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("");
     info!("NUS connection is now active");
 
-    // NOTE: init reedline
-    let mut line_editor = Reedline::create();
-
-    // NOTE: obtain + fulfill props
-    let mut props = periph.properties().await.unwrap().unwrap();
-    props.rssi = None; // ignore RSSI for desc string
-    let pdesc = periph_desc_string(&props);
-
-    let prompt = DefaultPrompt {
-        left_prompt: DefaultPromptSegment::CurrentDateTime,
-        right_prompt: DefaultPromptSegment::Basic(pdesc),
-    };
-
+    // INFO: rustyline loop
     loop {
-        let sig = line_editor.read_line(&prompt);
-        match sig {
-            Ok(Signal::Success(buffer)) => {
+        let readline = line_editor.readline("> ");
+        match readline {
+            Ok(line) => {
                 // NOTE: add newline char
-                let tmp_s: String = format!("{buffer}\n");
+                let tmp_s: String = format!("{line}\n");
                 let tmp_bytes = tmp_s.as_bytes();
                 // println!("sending -->{:?}<--", buffer);
                 let wr_result = periph
@@ -343,56 +347,50 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await;
                 match wr_result {
                     Ok(_good) => {
-                        debug!("{{to_dut: '{}'}}", buffer.clone());
+                        debug!("{{to_dut: '{}'}}", line.clone());
+                        println!("[SENT='{}' @ {}]", 
+                            Black.on(RGB(0xee, 0xaa, 0xaa)).bold().paint(line.clone().trim()),
+                            Local::now()
+                        );
                         // match rxSender.send(buffer.clone()) {
-                        //     Ok(_good) => {},
-                        //     Err(_bad) => {/* TODO - handle error */},
-                        // }
-                        line_editor.run_edit_commands(&[
-                            EditCommand::MoveToEnd{select: false}
-                            // EditCommand::MoveToLineEnd {select: false},
-                            // EditCommand::InsertNewline,
-                            // EditCommand::MoveToLineStart {select: false},
-                        ]);
-                        // print!("{tmp_s}");
-                        // loop {
-                        //     match printer.get_line() {
-                        //         Some(line) => {
-                        //             print!("{line}");
-                        //         },
-                        //         None => {
-                        //             break;
-                        //         }
-                        //     }
-                        // }
-
                     }
-                    Err(bad) => {
-                        error!("Error writing to {nus_send:?} = {bad:?}");
-                        /* TODO - handle error */
+                    Err(_bad) => {
+                        // TODO - handle BLE write error
                     }
                 }
-            }
-            Ok(Signal::CtrlD) | Ok(Signal::CtrlC) => {
-                break;
-            }
-            x => {
-                warn!("Event: {:?}", x);
+                // line_editor.add_history_entry(line.as_str());
+                // println!("sent: {}", line);
+                // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break
+            },
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break
             }
         }
     }
 
     info!("nusterm is exiting...");
-
+    
     // NOTE: disconnect periph issues its own print/info statements
     disconnect_periph(&periph).await;
-
-    debug!("Stopping tokio task handler (notifications)... ");
+    
+    info!("Stopping tokio task handler (notifications)... ");
     notifs_handler.abort();
-    debug!("[DONE]");
-
+    info!("[DONE]");
+    
     // TODO: put helpful info in this 'exit message'
     press_enter("All done\nPress <ENTER> to exit");
-
+    
+    // #[cfg(feature = "with-file-history")]
+    // line_editor.save_history("history.txt");
     Ok(())
+
 }
