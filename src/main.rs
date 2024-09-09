@@ -1,5 +1,7 @@
 // Create a default reedline object to handle user input
 
+pub mod user_input;
+
 use std::error::Error;
 use std::fs::{create_dir_all, File};
 use std::path::{Path, PathBuf};
@@ -293,6 +295,8 @@ async fn main() -> Result<()> {
     // let mut printer: ExternalPrinter<String> = ExternalPrinter::new(100);
     // let rxSender = printer.sender();
 
+    // TODO: just make necessary mpsc channels to communicate to ratatui user_input.rs
+
     debug!("Spawning tokio task as handler for notifications");
     let mut notif_stream = periph.notifications().await.unwrap();
     // let (mut ble_notif_recv, mut ble_notif_send) = tokio::sync::mpsc::channel::<String>(8);
@@ -310,13 +314,6 @@ async fn main() -> Result<()> {
                 match String::from_utf8(v.clone()) {
                     Ok(s) => {
                         debug!("{{from_dut: '{s}'}}");
-                        // match rxSender.send(s) {
-                        //     Ok(_good) => {},
-                        //     Err(_bad) => {/* TODO - handle error */},
-                        // }
-                        // printer.print(s.clone()).expect("hmm");
-                        // print!("{s}");
-                        // print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
                         print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
                     },
                     Err(_e) => {
@@ -334,48 +331,58 @@ async fn main() -> Result<()> {
     println!("");
     info!("NUS connection is now active");
 
-    // INFO: rustyline loop
-    loop {
-        let readline = line_editor.readline("> ");
-        match readline {
-            Ok(line) => {
-                // NOTE: add newline char
-                let tmp_s: String = format!("{line}\n");
-                let tmp_bytes = tmp_s.as_bytes();
-                // println!("sending -->{:?}<--", buffer);
-                let wr_result = periph
-                    .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-                    .await;
-                match wr_result {
-                    Ok(_good) => {
-                        debug!("{{to_dut: '{}'}}", line.clone());
-                        println!("[SENT='{}' @ {}]", 
-                            Black.on(RGB(0xee, 0xaa, 0xaa)).bold().paint(line.clone().trim()),
-                            Local::now()
-                        );
-                        // match rxSender.send(buffer.clone()) {
-                    }
-                    Err(_bad) => {
-                        // TODO - handle BLE write error
-                    }
-                }
-                // line_editor.add_history_entry(line.as_str());
-                // println!("sent: {}", line);
-                // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
-            },
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break
-            },
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break
-            },
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break
-            }
-        }
+    // // INFO: rustyline loop
+    // loop {
+    //     let readline = line_editor.readline("> ");
+    //     match readline {
+    //         Ok(line) => {
+    //             // NOTE: add newline char
+    //             let tmp_s: String = format!("{line}\n");
+    //             let tmp_bytes = tmp_s.as_bytes();
+    //             // println!("sending -->{:?}<--", buffer);
+    //             let wr_result = periph
+    //                 .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
+    //                 .await;
+    //             match wr_result {
+    //                 Ok(_good) => {
+    //                     let tmp_props: PeripheralProperties = periph.properties().await.unwrap().unwrap();
+    //                     let tmp_desc = periph_desc_string(&tmp_props);
+    //                     debug!("{{to_dut: '{}'}}", line.clone());
+    //                     println!("[SENT='{}' @ {} to {}]",
+    //                         White.on(RGB(0x44, 0x11, 0x11)).bold().paint(line.clone().trim()),
+    //                         Local::now(),
+    //                         tmp_desc
+    //                     );
+    //                     // match rxSender.send(buffer.clone()) {
+    //                 }
+    //                 Err(_bad) => {
+    //                     // TODO - handle BLE write error
+    //                 }
+    //             }
+    //             // line_editor.add_history_entry(line.as_str());
+    //             // println!("sent: {}", line);
+    //             // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
+    //         },
+    //         Err(ReadlineError::Interrupted) => {
+    //             println!("CTRL-C");
+    //             break
+    //         },
+    //         Err(ReadlineError::Eof) => {
+    //             println!("CTRL-D");
+    //             break
+    //         },
+    //         Err(err) => {
+    //             println!("Error: {:?}", err);
+    //             break
+    //         }
+    //     }
+    // }
+
+    // jump into blocking function, user_input_main
+    // TODO: feed user_input_main the right sender/receiver objects re: mpsc channels to BLE object
+    match user_input::user_input_main() {
+        Ok(_good) => {},
+        Err(_bad) => {},
     }
 
     info!("nusterm is exiting...");
