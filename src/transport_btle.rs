@@ -68,7 +68,7 @@ pub struct NusTransportBtleplug {
 }
 
 #[async_trait]
-impl NusTransport for &NusTransportBtleplug {
+impl NusTransport for NusTransportBtleplug {
     async fn mtu(&self) -> usize {
         // TODO fix once btleplug supports MTU lookup
         244

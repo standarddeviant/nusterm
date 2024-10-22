@@ -136,14 +136,11 @@ struct Args {
 //     }
 // }
 
-fn print_nus_failure() {
-
-
-
-    error!("Unable to properly configure the BLE characteristics required to use NUS");
-    error!("NOTE: NUS_TX (BLE notifs from periph) = {NUS_TX_CHAR_UUID}");
-    error!("NOTE: NUS_RX (BLE write to periph) = {NUS_RX_CHAR_UUID}");
-}
+// fn print_nus_failure() {
+//     error!("Unable to properly configure the BLE characteristics required to use NUS");
+//     error!("NOTE: NUS_TX (BLE notifs from periph) = {NUS_TX_CHAR_UUID}");
+//     error!("NOTE: NUS_RX (BLE write to periph) = {NUS_RX_CHAR_UUID}");
+// }
 
 // async fn disconnect_periph(p: &PlatformPeripheral) {
 //     let addr = p.address();
@@ -223,18 +220,18 @@ async fn main() -> anyhow::Result<()> {
 
 
     // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    // let transport = &transport_btleplug::NusTransportBtleplug::new(args.name, addr).await?;
-    let tmpaddr:std::result::Result<BDAddr, btleplug::api::ParseBDAddrError> = BDAddr::from_str_delim("");
-    let transport = &NusTransportMock::new(String::from("mock"));
+
+    // INFO: mock transport
+    // let tmpaddr:std::result::Result<BDAddr, btleplug::api::ParseBDAddrError> = BDAddr::from_str_delim("");
+    // let transport = &NusTransportMock::new(String::from("mock"));
+    
+    // INFO: btleplug transport
+    let addr = BDAddr::from_str_delim(&args.addr);
+    let transport = 
+        &transport_btle::NusTransportBtleplug::new(args.name, addr)
+        .await
+        .expect("Unable to create NUS Transport");
+
     let _term_result = term::term_run(transport).await;
 
     // let _dc_result = transport.disconnect().await;
@@ -276,92 +273,6 @@ async fn main() -> anyhow::Result<()> {
 
     // info!("Discovering services...");
     // periph.discover_services().await.unwrap();
-
-    // info!("Configuring NUS chars + notifications...");
-    // let chars = periph.characteristics();
-    // let mut nus_recv: &Characteristic = &chars.first().unwrap();
-    // let mut nus_send: &Characteristic = &chars.first().unwrap();
-    // let mut subscribed_tx = false;
-    // let mut found_rx: bool = false;
-    // for c in chars.iter() {
-    //     match c.uuid {
-    //         UART_TX_CHAR_UUID => {
-    //             debug!("found NUS_TX (nus_recv) characteristic");
-    //             nus_recv = c;
-    //             if c.properties.contains(CharPropFlags::NOTIFY) {
-    //                 debug!("subscribing to characteristic {:?}", c);
-    //                 if let Ok(_good) = periph.subscribe(c).await {
-    //                     subscribed_tx = true;
-    //                 }
-    //             }
-    //         }
-    //         UART_RX_CHAR_UUID => {
-    //             debug!("found NUS_RX (nus_send) characteristic");
-    //             found_rx = true;
-    //             nus_send = c;
-    //         }
-    //         _ => (),
-    //     }
-    // }
-
-    // if we didn't set up the NUS chars, then bail and inform user
-    // if !(subscribed_tx && found_rx) {
-    //     print_nus_failure();
-    //     disconnect_periph(&periph).await;
-    //     press_enter("Press <ENTER> to exit");
-    //     // TODO: document different possible error codes
-    //     std::process::exit(42000);
-    // }
-
-
-    // Create external printer
-    // let printer: ExternalPrinter<String> = ExternalPrinter::default();
-    // let mut printer: ExternalPrinter<String> = ExternalPrinter::new(100);
-    // let rxSender = printer.sender();
-
-    // INFO: rustyline loop
-    // loop {
-    //     let readline = line_editor.readline("> ");
-    //     match readline {
-    //         Ok(line) => {
-    //             // NOTE: add newline char
-    //             let tmp_s: String = format!("{line}\n");
-    //             let tmp_bytes = tmp_s.as_bytes();
-    //             // println!("sending -->{:?}<--", buffer);
-    //             let wr_result = periph
-    //                 .write(nus_send, tmp_bytes, WriteType::WithoutResponse)
-    //                 .await;
-    //             match wr_result {
-    //                 Ok(_good) => {
-    //                     debug!("{{to_dut: '{}'}}", line.clone());
-    //                     println!("[SENT='{}' @ {}]", 
-    //                         Black.on(RGB(0xee, 0xaa, 0xaa)).bold().paint(line.clone().trim()),
-    //                         Local::now()
-    //                     );
-    //                     // match rxSender.send(buffer.clone()) {
-    //                 }
-    //                 Err(_bad) => {
-    //                     // TODO - handle BLE write error
-    //                 }
-    //             }
-    //             // line_editor.add_history_entry(line.as_str());
-    //             // println!("sent: {}", line);
-    //             // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
-    //         },
-    //         Err(ReadlineError::Interrupted) => {
-    //             println!("CTRL-C");
-    //             break
-    //         },
-    //         Err(ReadlineError::Eof) => {
-    //             println!("CTRL-D");
-    //             break
-    //         },
-    //         Err(err) => {
-    //             println!("Error: {:?}", err);
-    //             break
-    //         }
-    //     }
-    // }
 
     info!("nusterm is exiting...");
     
