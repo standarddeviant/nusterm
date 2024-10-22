@@ -6,14 +6,22 @@ edition = "2021"
 [dependencies]
 ansi_term = "0.12.1"
 anyhow = "1.0.86"
+async-trait = "0.1.73"
 btleplug = "0.11.5"
 chrono = "0.4.38"
 clap = {version = "4.5.15", features = ["derive"]}
+crossterm = "0.28.1"
 futures = "0.3.30"
 inquire = {version = "0.7.5"}
 log = "0.4.22"
+miette = "7.2.0"
 pretty_env_logger = "0.5.0"
+r3bl_core = "0.10.0"
+r3bl_terminal_async = "0.5.6"
 rustyline = {version = "14.0.0", features = ["with-file-history"]}
 simplelog = "0.12.2"
+strum = "0.26.3"
+strum_macros = "0.26.4"
 tokio = { version = "1.35.1", features = ["macros", "rt", "rt-multi-thread"] }
+tracing = "0.1.40"
 uuid = "1.10.0"
