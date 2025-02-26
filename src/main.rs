@@ -2,8 +2,8 @@
 
 use std::error::Error;
 use std::fs::{create_dir_all, File};
-use std::path::{Path, PathBuf};
 use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // use text_io::read;
@@ -16,11 +16,17 @@ use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, ExternalPrinter, Result};
 
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _,
-    Peripheral as ApiPeripheral, PeripheralProperties,
-    ScanFilter, WriteType,
+    BDAddr, Central, CharPropFlags, Characteristic, Manager as _, Peripheral as ApiPeripheral,
+    PeripheralProperties, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral as PlatformPeripheral};
+
+// focused use
+// use btleplug::api::{
+//     BDAddr, CharPropFlags, Characteristic, Peripheral as api_Peripheral, PeripheralProperties,
+//     WriteType,
+// };
+
 use futures::stream::StreamExt;
 
 // use tokio::sync::mpsc;
@@ -30,12 +36,13 @@ use uuid::Uuid;
 
 use inquire::Select;
 
-use log::{debug, info, warn, error};
-use simplelog::{CombinedLogger, ColorChoice, Config, ConfigBuilder, LevelFilter,
-                SimpleLogger, TerminalMode, WriteLogger};
+use log::{debug, error, info, warn};
+use simplelog::{
+    ColorChoice, CombinedLogger, Config, ConfigBuilder, LevelFilter, SimpleLogger, TerminalMode,
+    WriteLogger,
+};
 
-use ansi_term::Colour::{Black, Blue, Yellow, White, Red, RGB};
-
+use ansi_term::Colour::{Black, Blue, Red, White, Yellow, RGB};
 
 // NOTE: use clap for cli args
 // const PERIPHERAL_NAME_MATCH_FILTER: &str = "Neuro";
@@ -64,10 +71,49 @@ const UART_TX_CHAR_UUID: Uuid = Uuid::from_u128(0x6E400003_B5A3_F393_E0A9_E50E24
 // }
 //
 
+pub const BOGUS_MANUF_ID: u16 = 0x3412;
+pub const NRF_MANUF_ID: u16 = 0x0059;
+pub const RSI_MANUF_ID: u16 = 0x0E90;
+
+fn periph_addr_string(maybe_props: Option<&PeripheralProperties>) -> String {
+    // info!("{:?}", p.manufacturer_data);
+    // info!("{:?}", p.local_name);
+    if let Some(p) = maybe_props {
+        if let Some(name) = p.local_name.clone() {
+            if name.contains("FluidLogic") {
+                for (key, value) in p.manufacturer_data.iter() {
+                    // info!("key = {key}");
+                    match key {
+                        &BOGUS_MANUF_ID | &NRF_MANUF_ID | &RSI_MANUF_ID => {
+                            let astr_hex_vec: Vec<String> =
+                                value.iter().map(|x: &u8| format!("{:02X?}", x)).collect();
+                            let astr = astr_hex_vec.join(":");
+                            return astr;
+                        }
+                        _ => (), // ignore other values
+                    }
+                }
+            }
+        } else {
+            let mut tmp = format!("{:?}", p.address);
+            if let Some(atype) = p.address_type {
+                tmp = format!("{} ({:?})", tmp, atype);
+            }
+            return tmp;
+            // return format!("{:?} ({})", p.address, p.address_type);
+        }
+    }
+
+    "".into()
+
+    // default return value
+    // format!("{:?}", maybe_props)
+}
+
 // this is a pure function; output is a strict function of input
 fn periph_desc_string(props: &PeripheralProperties) -> String {
     let mut dlist: Vec<String> = vec![]; // desc list
-    // name first
+                                         // name first
     if let Some(name) = &props.local_name {
         dlist.push(format!("name={}", name));
     }
@@ -78,12 +124,11 @@ fn periph_desc_string(props: &PeripheralProperties) -> String {
     }
 
     // addr next
-    dlist.push(format!("addr={}", props.address));
+    dlist.push(format!("addr={}", periph_addr_string(Some(props))));
 
     // return a joined version as the output
     dlist.join(" : ")
 }
-
 
 async fn connect_periph(adapter: &Adapter) -> Result<String> {
     // INFO: keep scanning until we find our peripheral
@@ -102,9 +147,7 @@ async fn connect_periph(adapter: &Adapter) -> Result<String> {
         let mut pstrings: Vec<String> = vec![String::from("NOT IN LIST; KEEP SCANNING")];
         for p in &peripherals {
             pstrings.push(match p.properties().await {
-                Ok(Some(props)) => {
-                    periph_desc_string(&props)
-                },
+                Ok(Some(props)) => periph_desc_string(&props),
                 _ => {
                     format!("ERR: unable to fetch properties")
                 }
@@ -157,10 +200,8 @@ fn press_enter(prompt: &str) {
     }
 }
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
-
     // NOTE: set up logger
     let dt = Local::now();
     let mut logs_dir_path = PathBuf::new();
@@ -168,16 +209,16 @@ async fn main() -> Result<()> {
     logs_dir_path.push("LOGS");
     logs_dir_path.push(dt.format("%y_%m_%b").to_string());
     match create_dir_all(logs_dir_path.clone()) {
-        Ok(_good) => {},
+        Ok(_good) => {}
         Err(_bad) => {
             // FIXME: handle error
-        },
+        }
     }
 
     let mut line_editor = DefaultEditor::new().expect("Can't make line_editor");
     // let mut ep1 = line_editor.create_external_printer().expect("Can't make ext. printer");
     // let mut ep2 = line_editor.create_external_printer().expect("Can't make ext. printer");
- 
+
     // NOTE: parse args
     let args = Args::parse();
     // print args
@@ -192,7 +233,7 @@ async fn main() -> Result<()> {
 
     let log_config = ConfigBuilder::new()
         .set_time_format_rfc2822()
-        .add_filter_ignore(format!("{}","rustyline"))
+        .add_filter_ignore(format!("{}", "rustyline"))
         // .set_time_offset_to_local().unwrap()
         .build();
     CombinedLogger::init(vec![
@@ -206,14 +247,13 @@ async fn main() -> Result<()> {
         //
         // #[cfg(not(feature = "termcolor"))]
         // SimpleLogger::new(LevelFilter::Info, log_config.clone()),
-
         WriteLogger::new(
             LevelFilter::Debug,
             log_config.clone(),
             File::create(code_log_fpath).unwrap(),
         ),
-    ]).unwrap();
-
+    ])
+    .unwrap();
 
     // NOTE: init btleplug
     let manager = Manager::new().await.unwrap();
@@ -228,7 +268,6 @@ async fn main() -> Result<()> {
     if let Ok(adapter_info) = adapter.adapter_info().await {
         info!("adapter = {:?}", adapter_info);
     }
-
 
     // NOTE: this connects the adapter (i.e. the central) to the peripheral inside the function
     // NOTE: it modifies the state of adapter
@@ -287,7 +326,6 @@ async fn main() -> Result<()> {
         std::process::exit(42000);
     }
 
-
     // Create external printer
     // let printer: ExternalPrinter<String> = ExternalPrinter::default();
     // let mut printer: ExternalPrinter<String> = ExternalPrinter::new(100);
@@ -317,8 +355,11 @@ async fn main() -> Result<()> {
                         // printer.print(s.clone()).expect("hmm");
                         // print!("{s}");
                         // print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
-                        print!("{}", RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s));
-                    },
+                        print!(
+                            "{}",
+                            RGB(0xff, 0xff, 0xbf).on(RGB(0x5e, 0x3c, 0x99)).paint(s)
+                        );
+                    }
                     Err(_e) => {
                         warn!("NUS_TX: non-utf-data = {:?}", v.clone());
                         debug!("{{from_dut: '{:?}'}}", v.clone());
@@ -349,8 +390,12 @@ async fn main() -> Result<()> {
                 match wr_result {
                     Ok(_good) => {
                         debug!("{{to_dut: '{}'}}", line.clone());
-                        println!("[SENT='{}' @ {}]", 
-                            Black.on(RGB(0xee, 0xaa, 0xaa)).bold().paint(line.clone().trim()),
+                        println!(
+                            "[SENT='{}' @ {}]",
+                            Black
+                                .on(RGB(0xee, 0xaa, 0xaa))
+                                .bold()
+                                .paint(line.clone().trim()),
                             Local::now()
                         );
                         // match rxSender.send(buffer.clone()) {
@@ -362,36 +407,35 @@ async fn main() -> Result<()> {
                 // line_editor.add_history_entry(line.as_str());
                 // println!("sent: {}", line);
                 // printer.print(format!("[send = '{}']\n", line.clone())).expect("ext. print err");
-            },
+            }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
-                break
-            },
+                break;
+            }
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
-                break
-            },
+                break;
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
-                break
+                break;
             }
         }
     }
 
     info!("nusterm is exiting...");
-    
+
     // NOTE: disconnect periph issues its own print/info statements
     disconnect_periph(&periph).await;
-    
+
     info!("Stopping tokio task handler (notifications)... ");
     notifs_handler.abort();
     info!("[DONE]");
-    
+
     // TODO: put helpful info in this 'exit message'
     press_enter("All done\nPress <ENTER> to exit");
-    
+
     // #[cfg(feature = "with-file-history")]
     // line_editor.save_history("history.txt");
     Ok(())
-
 }
